@@ -2,6 +2,7 @@ import requests
 import csv
 import json
 import pandas as pd
+from io import StringIO
 import sqlite3
 
 
@@ -14,22 +15,40 @@ args: source - str
 returns: str of source content
 """
 def fetch_data(source):
-    if source.startswith("http"):
-        # if url
-        response = requests.get(source)
-        return response.text
-    else:
-        # if local file
-        with open(source, 'r') as file:
-            return file.read()
+    try:
+        if source.startswith("http"):
+            # if url
+            response = requests.get(source)
+            response.raise_for_status() # raises HTTP error for bad responses
+            return response.text
+        else:
+            # if local file
+            with open(source, 'r') as file:
+                return file.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File not found: {source}")
+    except requests.exceptions.RequestException as e:
+        raise requests.exceptions.RequestException(f"Failed to fetch data from URL: {source}. Error: {str(e)}")
+    except Exception as e:
+        raise Exception(f"An unexpected error occurred: {str(e)}")
+    return;
 
 
 """
 2) detect format of file and convert data format
-    - input: csv or json or sql table
-    - output: file format of user choice
+    - input: csv or json files
+    - output: file in format of user choice (csv, json, sql)
 """
-# TODO
+def detect_file_format(data):
+    try:
+        json.loads(data)
+        return 'json' # if json load successful, then is json format
+    except:
+        try:
+            pd.read_csv(StringIO(data))
+            return 'csv' # if pandas read csv succesful, then is csv format
+        except:
+            raise ValueError("Data format not recognized (must be JSON or CSV).")
 
 
 """
@@ -63,11 +82,14 @@ def fetch_data(source):
 
 # processor function
 def process_data(source):
+
     # fetch data
     print("Fetching data...")
     raw_data = fetch_data(source)
-    print(raw_data)
 
+    # check format
+    format = detect_file_format(raw_data)
+    print(f"File format: {format}")
 
     return;
 
