@@ -62,14 +62,15 @@ def convert_data_format(data, source_format, target_format, database_name=None, 
     elif source_format == 'json' and target_format == 'csv':
         df = pd.read_json(StringIO(data))
         return df.to_csv(index=False)
-    # TO SQL
-    elif target_format == 'sql':
-        df = pd.read_csv(StringIO(data)) if source_format=='csv' else pd.read_json(StringIO(data))
-        conn = sqlite3.connect(database_name) # connect to sql database
-        df.to_sql(table_name, conn, if_exists='replace', index=False)
-        conn.close()
-        return f"Data successfully stored in {table_name} table in {database_name}"
+    
+    # if SQL then just return raw as we don't want to convert before storing (we want to convert the dataframe to sql after modifying)
+    return data
 
+# convert nested JSON to strings
+def flatten_json_values(df):
+    for column in df.columns:
+        df[column] = df[column].apply(lambda x: json.dumps(x) if isinstance(x, dict) else x)
+    return df
 
 
 """
@@ -79,7 +80,7 @@ def convert_data_format(data, source_format, target_format, database_name=None, 
 """
 def modify_columns(data, target_format, columns_to_keep=None, columns_to_add=None):
 
-    df = pd.read_csv(StringIO(data)) if target_format == 'csv' else pd.read_json(StringIO(data))
+    df = pd.read_csv(StringIO(data)) if target_format in ['csv', 'sql'] else pd.read_json(StringIO(data))
 
     if columns_to_keep:
         df = df[columns_to_keep]
@@ -88,7 +89,7 @@ def modify_columns(data, target_format, columns_to_keep=None, columns_to_add=Non
         for col, value in columns_to_add.items():
             df[col] = value
     
-    if target_format == 'csv': # only will be csv or json because for sql the conversion is done after this
+    if target_format in ['csv', 'sql']: # only will be csv or json because for sql the conversion is done after this
         return df.to_csv(index=False)
     else:
         return df.to_json(orient='records')
@@ -99,12 +100,27 @@ def modify_columns(data, target_format, columns_to_keep=None, columns_to_add=Non
 """
 def store_data(data, target_format, output_file_path, database_name=None, table_name=None):
     if target_format == 'sql':
-        convert_data_format(data, detect_file_format(data), 'sql', database_name=database_name, table_name=table_name)
-    else:
-        with open(output_file_path, 'w') as file: # 'w' for writing to a file
+        try:
+            # try reading the csv data into a df
+            df = pd.read_csv(StringIO(data))
+        except pd.errors.ParserError as e:
+            raise ValueError(f"Error parsing CSV data: {str(e)}")
+        
+        # flatten any json-like values if needed
+        df = flatten_json_values(df)
+        
+        # connect to sqlite and store data
+        try:
+            conn = sqlite3.connect(database_name)
+            df.to_sql(table_name, conn, if_exists='replace', index=False)
+            conn.close()
+            print(f"Data successfully stored in {table_name} table in {database_name}")
+        except sqlite3.Error as e:
+            raise ValueError(f"Error storing data in SQLite: {str(e)}")
+    
+    else:  # for csv or json
+        with open(output_file_path, 'w') as file:
             file.write(data)
-
-    return;
 
 
 """
@@ -135,10 +151,9 @@ def process_data(source, output_file_path, columns_to_keep=None, columns_to_add=
         if target_format == 'sql':
             database_name = input("Enter the database name (Ex. 'output.db'): ")
             table_name = input("Enter the table name: ")
-            converted_data = raw_data # this is only because we want to convert to sql when storing data
-        else:
-            print("Converting data...")
-            converted_data = convert_data_format(raw_data, source_format, target_format)
+
+        print("Converting data...")
+        converted_data = convert_data_format(raw_data, source_format, target_format)
 
         # generate summary
         ingestion_summary = generate_summary(raw_data, source_format)
@@ -156,8 +171,19 @@ def process_data(source, output_file_path, columns_to_keep=None, columns_to_add=
             store_data(modified_data, target_format, output_file_path + "." + target_format)
 
         # generate post processing summary
-        post_summary = generate_summary(modified_data, target_format)
-        print(f"Post-processing summary:\n {post_summary}")
+        if target_format == 'sql':
+            # query from sql
+            conn = sqlite3.connect(database_name)
+            query = f"SELECT COUNT(*) as num_records, * FROM {table_name} LIMIT 1"
+            result_df = pd.read_sql_query(query, conn)
+            num_records = result_df['num_records'].values[0]
+            num_columns = len(result_df.columns) - 1  # Excluding the "num_records" column
+            conn.close()
+            print(f"Post-processing summary:\n Number of records: {num_records}\n Number of columns: {num_columns}")
+        else:
+            # generate post processing summary for csv or json
+            post_summary = generate_summary(modified_data, target_format)
+            print(f"Post-processing summary:\n {post_summary}")
     except Exception as e:
         print(f"An error occurred: {str(e)}")
 
