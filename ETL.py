@@ -9,8 +9,19 @@ import sqlite3
 1) fetch / download / retrieve data
     - url
     - local file
+
+args: source - str
+returns: str of source content
 """
-# TODO
+def fetch_data(source):
+    if source.startswith("http"):
+        # if url
+        response = requests.get(source)
+        return response.text
+    else:
+        # if local file
+        with open(source, 'r') as file:
+            return file.read()
 
 
 """
@@ -50,6 +61,17 @@ import sqlite3
 # TODO
 
 
-# MAIN METHOD
-def process_data():
+# processor function
+def process_data(source):
+    # fetch data
+    print("Fetching data...")
+    raw_data = fetch_data(source)
+    print(raw_data)
+
+
     return;
+
+
+if __name__ == "__main__":
+    process_data("cville_residential.csv")
+    process_data("https://api.github.com/users/angadv12/repos")
